@@ -1,0 +1,44 @@
+name: Build AELE Countdown Widget DMG
+
+on:
+  push:
+    branches:
+      - aele-countdown-widget
+    paths:
+      - 'AELECountdown/**'
+      - 'AELECountdownWidget/**'
+      - 'AELECountdown.xcodeproj/**'
+      - 'build_aele_widget_dmg.sh'
+      - '.github/workflows/build-aele-countdown-widget.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build native macOS app, widget, and DMG
+        shell: bash
+        run: |
+          chmod +x build_aele_widget_dmg.sh
+          ./build_aele_widget_dmg.sh
+
+      - name: Verify output
+        shell: bash
+        run: |
+          test -f build-aele-widget/AELE-Countdown-Widget.dmg
+          test -f build-aele-widget/AELE-Countdown-Widget.sha256
+          cat build-aele-widget/AELE-Countdown-Widget.sha256
+          hdiutil verify build-aele-widget/AELE-Countdown-Widget.dmg
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: AELE-Countdown-Widget-macOS
+          path: |
+            build-aele-widget/AELE-Countdown-Widget.dmg
+            build-aele-widget/AELE-Countdown-Widget.sha256
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,40 @@
+name: Build FlipClock Pomodoro DMG
+
+on:
+  push:
+    branches:
+      - flipclock-pomodoro-dmg
+    paths:
+      - 'FlipClockPomodoro/**'
+      - '.github/workflows/build-flipclock-pomodoro.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build universal macOS app and DMG
+        shell: bash
+        run: |
+          chmod +x FlipClockPomodoro/build_dmg.sh
+          FlipClockPomodoro/build_dmg.sh
+
+      - name: Verify package
+        shell: bash
+        run: |
+          test -f FlipClockPomodoro/build/FlipClock-Pomodoro.dmg
+          cat FlipClockPomodoro/build/FlipClock-Pomodoro.sha256
+          hdiutil verify FlipClockPomodoro/build/FlipClock-Pomodoro.dmg
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlipClock-Pomodoro-macOS
+          path: |
+            FlipClockPomodoro/build/FlipClock-Pomodoro.dmg
+            FlipClockPomodoro/build/FlipClock-Pomodoro.sha256
+          if-no-files-found: error
+          retention-days: 30

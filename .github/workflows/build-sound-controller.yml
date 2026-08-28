@@ -1,0 +1,40 @@
+name: Build Sound Controller DMG
+
+on:
+  push:
+    branches:
+      - sound-controller-dmg
+    paths:
+      - 'SoundController/**'
+      - '.github/workflows/build-sound-controller.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build universal macOS app and DMG
+        shell: bash
+        run: |
+          chmod +x SoundController/build_dmg.sh
+          SoundController/build_dmg.sh
+
+      - name: Verify package
+        shell: bash
+        run: |
+          test -f SoundController/build/Sound-Controller.dmg
+          cat SoundController/build/Sound-Controller.sha256
+          hdiutil verify SoundController/build/Sound-Controller.dmg
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sound-Controller-macOS
+          path: |
+            SoundController/build/Sound-Controller.dmg
+            SoundController/build/Sound-Controller.sha256
+          if-no-files-found: error
+          retention-days: 30

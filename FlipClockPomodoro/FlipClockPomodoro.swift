@@ -2,8 +2,22 @@ import SwiftUI
 import AppKit
 import Combine
 
-enum ClockMode: String, CaseIterable, Identifiable {
+enum MainMode: String, CaseIterable, Identifiable {
     case clock = "Clock"
+    case timer = "Timer"
+    case pomodoro = "Pomodoro"
+
+    var id: String { rawValue }
+}
+
+enum TimerDirection: String, CaseIterable, Identifiable {
+    case countDown = "Count Down"
+    case countUp = "Count Up"
+
+    var id: String { rawValue }
+}
+
+enum PomodoroPhase: String, CaseIterable, Identifiable {
     case focus = "Focus"
     case shortBreak = "Short Break"
     case longBreak = "Long Break"
@@ -11,21 +25,37 @@ enum ClockMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum TimeComponent {
+    case hour
+    case minute
+    case second
+}
+
 @MainActor
 final class ClockModel: ObservableObject {
+    static let maxTimerSeconds = (99 * 3600) + (59 * 60) + 59
+
     @Published var now = Date()
-    @Published var mode: ClockMode = .clock
-    @Published var remainingSeconds: Int = 25 * 60
+    @Published var mainMode: MainMode = .clock
+    @Published var timerDirection: TimerDirection = .countDown
+    @Published var pomodoroPhase: PomodoroPhase = .focus
     @Published var isRunning = false
+    @Published var timerCurrentSeconds = 15 * 60
+    @Published var pomodoroRemainingSeconds = 25 * 60
 
     @AppStorage("focusMinutes") var focusMinutes = 25
     @AppStorage("shortBreakMinutes") var shortBreakMinutes = 5
     @AppStorage("longBreakMinutes") var longBreakMinutes = 15
     @AppStorage("use24Hour") var use24Hour = false
+    @AppStorage("countdownSeedSeconds") var countdownSeedSeconds = 15 * 60
+    @AppStorage("countupSeedSeconds") var countupSeedSeconds = 0
 
     private var timer: AnyCancellable?
 
     init() {
+        timerCurrentSeconds = countdownSeedSeconds
+        pomodoroRemainingSeconds = focusMinutes * 60
+
         timer = Timer.publish(every: 1, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
@@ -36,99 +66,310 @@ final class ClockModel: ObservableObject {
 
     private func tick() {
         now = Date()
-        guard mode != .clock, isRunning else { return }
-        if remainingSeconds > 0 {
-            remainingSeconds -= 1
-        }
-        if remainingSeconds == 0 {
-            isRunning = false
-            NSSound.beep()
-        }
-    }
+        guard isRunning else { return }
 
-    func setMode(_ newMode: ClockMode) {
-        mode = newMode
-        isRunning = false
-        reset()
-    }
-
-    func reset() {
-        switch mode {
+        switch mainMode {
         case .clock:
-            remainingSeconds = focusMinutes * 60
-        case .focus:
-            remainingSeconds = focusMinutes * 60
-        case .shortBreak:
-            remainingSeconds = shortBreakMinutes * 60
-        case .longBreak:
-            remainingSeconds = longBreakMinutes * 60
+            isRunning = false
+
+        case .timer:
+            switch timerDirection {
+            case .countDown:
+                if timerCurrentSeconds > 0 {
+                    timerCurrentSeconds -= 1
+                }
+                if timerCurrentSeconds == 0 {
+                    finishRun()
+                }
+
+            case .countUp:
+                if timerCurrentSeconds < Self.maxTimerSeconds {
+                    timerCurrentSeconds += 1
+                }
+                if timerCurrentSeconds >= Self.maxTimerSeconds {
+                    finishRun()
+                }
+            }
+
+        case .pomodoro:
+            if pomodoroRemainingSeconds > 0 {
+                pomodoroRemainingSeconds -= 1
+            }
+            if pomodoroRemainingSeconds == 0 {
+                finishRun()
+            }
         }
+    }
+
+    private func finishRun() {
+        isRunning = false
+        NSSound.beep()
+    }
+
+    func setMainMode(_ newMode: MainMode) {
+        guard mainMode != newMode else { return }
+        mainMode = newMode
+        isRunning = false
+
+        switch newMode {
+        case .clock:
+            break
+        case .timer:
+            resetTimer()
+        case .pomodoro:
+            resetPomodoro()
+        }
+    }
+
+    func setTimerDirection(_ direction: TimerDirection) {
+        guard timerDirection != direction else { return }
+        timerDirection = direction
+        isRunning = false
+        resetTimer()
+    }
+
+    func setPomodoroPhase(_ phase: PomodoroPhase) {
+        guard pomodoroPhase != phase else { return }
+        pomodoroPhase = phase
+        isRunning = false
+        resetPomodoro()
     }
 
     func toggleRunning() {
-        guard mode != .clock else { return }
-        if remainingSeconds == 0 { reset() }
-        isRunning.toggle()
+        switch mainMode {
+        case .clock:
+            return
+
+        case .timer:
+            if timerDirection == .countDown && timerCurrentSeconds == 0 {
+                resetTimer()
+                guard timerCurrentSeconds > 0 else {
+                    NSSound.beep()
+                    return
+                }
+            }
+            isRunning.toggle()
+
+        case .pomodoro:
+            if pomodoroRemainingSeconds == 0 {
+                resetPomodoro()
+            }
+            isRunning.toggle()
+        }
     }
 
-    func adjustCurrentMode(by delta: Int) {
-        switch mode {
+    func resetCurrent() {
+        isRunning = false
+        switch mainMode {
+        case .clock:
+            break
+        case .timer:
+            resetTimer()
+        case .pomodoro:
+            resetPomodoro()
+        }
+    }
+
+    func resetTimer() {
+        timerCurrentSeconds = timerDirection == .countDown ? countdownSeedSeconds : countupSeedSeconds
+    }
+
+    func resetPomodoro() {
+        switch pomodoroPhase {
         case .focus:
-            focusMinutes = min(120, max(1, focusMinutes + delta))
+            pomodoroRemainingSeconds = focusMinutes * 60
+        case .shortBreak:
+            pomodoroRemainingSeconds = shortBreakMinutes * 60
+        case .longBreak:
+            pomodoroRemainingSeconds = longBreakMinutes * 60
+        }
+    }
+
+    func adjustTimerComponent(_ component: TimeComponent, by delta: Int) {
+        guard mainMode == .timer, !isRunning, delta != 0 else { return }
+
+        var (hours, minutes, seconds) = components(for: timerCurrentSeconds)
+
+        switch component {
+        case .hour:
+            hours = wrapped(hours + delta, upperBound: 99)
+        case .minute:
+            minutes = wrapped(minutes + delta, upperBound: 59)
+        case .second:
+            seconds = wrapped(seconds + delta, upperBound: 59)
+        }
+
+        let total = min(Self.maxTimerSeconds, (hours * 3600) + (minutes * 60) + seconds)
+        timerCurrentSeconds = total
+
+        if timerDirection == .countDown {
+            countdownSeedSeconds = total
+        } else {
+            countupSeedSeconds = total
+        }
+    }
+
+    func adjustPomodoroMinutes(by delta: Int) {
+        guard mainMode == .pomodoro, !isRunning else { return }
+
+        switch pomodoroPhase {
+        case .focus:
+            focusMinutes = min(180, max(1, focusMinutes + delta))
         case .shortBreak:
             shortBreakMinutes = min(60, max(1, shortBreakMinutes + delta))
         case .longBreak:
-            longBreakMinutes = min(90, max(1, longBreakMinutes + delta))
-        case .clock:
-            return
+            longBreakMinutes = min(120, max(1, longBreakMinutes + delta))
         }
-        reset()
+        resetPomodoro()
     }
 
-    var primaryDigits: String {
-        switch mode {
+    private func wrapped(_ value: Int, upperBound: Int) -> Int {
+        let modulus = upperBound + 1
+        let normalized = value % modulus
+        return normalized >= 0 ? normalized : normalized + modulus
+    }
+
+    func components(for totalSeconds: Int) -> (Int, Int, Int) {
+        let clamped = min(Self.maxTimerSeconds, max(0, totalSeconds))
+        let hours = clamped / 3600
+        let minutes = (clamped % 3600) / 60
+        let seconds = clamped % 60
+        return (hours, minutes, seconds)
+    }
+
+    var displayComponents: (Int, Int, Int) {
+        switch mainMode {
         case .clock:
             let calendar = Calendar.current
-            let hour = calendar.component(.hour, from: now)
-            let displayedHour: Int
+            let rawHour = calendar.component(.hour, from: now)
+            let hour: Int
             if use24Hour {
-                displayedHour = hour
+                hour = rawHour
             } else {
-                let twelve = hour % 12
-                displayedHour = twelve == 0 ? 12 : twelve
+                let twelveHour = rawHour % 12
+                hour = twelveHour == 0 ? 12 : twelveHour
             }
-            return String(format: "%02d", displayedHour)
-        default:
-            return String(format: "%02d", remainingSeconds / 60)
+            return (
+                hour,
+                calendar.component(.minute, from: now),
+                calendar.component(.second, from: now)
+            )
+
+        case .timer:
+            return components(for: timerCurrentSeconds)
+
+        case .pomodoro:
+            return components(for: pomodoroRemainingSeconds)
         }
     }
 
-    var secondaryDigits: String {
-        switch mode {
-        case .clock:
-            return String(format: "%02d", Calendar.current.component(.minute, from: now))
-        default:
-            return String(format: "%02d", remainingSeconds % 60)
-        }
-    }
+    var hourDigits: String { String(format: "%02d", displayComponents.0) }
+    var minuteDigits: String { String(format: "%02d", displayComponents.1) }
+    var secondDigits: String { String(format: "%02d", displayComponents.2) }
 
     var dateLabel: String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "EEE, d MMM"
-        return formatter.string(from: now).uppercased()
+        formatter.locale = Locale.current
+        formatter.dateFormat = use24Hour ? "MMM d, yyyy 'at' HH:mm:ss" : "MMM d, yyyy 'at' h:mm:ss a"
+        return formatter.string(from: now)
     }
 
-    var sessionLabel: String {
-        switch mode {
+    var statusLabel: String {
+        switch mainMode {
         case .clock:
             return use24Hour ? "24-HOUR CLOCK" : "12-HOUR CLOCK"
-        case .focus:
-            return isRunning ? "FOCUSING" : "FOCUS READY"
-        case .shortBreak:
-            return isRunning ? "SHORT BREAK" : "SHORT BREAK READY"
-        case .longBreak:
-            return isRunning ? "LONG BREAK" : "LONG BREAK READY"
+
+        case .timer:
+            if isRunning {
+                return timerDirection == .countDown ? "COUNTING DOWN" : "COUNTING UP"
+            }
+            if timerDirection == .countDown && timerCurrentSeconds == 0 {
+                return "SCROLL HOUR • MIN • SEC TO SET"
+            }
+            return "SCROLL HOUR • MIN • SEC TO ADJUST"
+
+        case .pomodoro:
+            switch pomodoroPhase {
+            case .focus:
+                return isRunning ? "FOCUSING" : "FOCUS READY"
+            case .shortBreak:
+                return isRunning ? "SHORT BREAK" : "SHORT BREAK READY"
+            case .longBreak:
+                return isRunning ? "LONG BREAK" : "LONG BREAK READY"
+            }
         }
+    }
+
+    var timerValuesEditable: Bool {
+        mainMode == .timer && !isRunning
+    }
+}
+
+final class ScrollCaptureNSView: NSView {
+    var enabled = false {
+        didSet { window?.invalidateCursorRects(for: self) }
+    }
+    var onStep: ((Int) -> Void)?
+    private var accumulatedDelta: CGFloat = 0
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        enabled ? self : nil
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard enabled else {
+            super.scrollWheel(with: event)
+            return
+        }
+
+        let delta = event.scrollingDeltaY
+        guard delta != 0 else { return }
+
+        if event.hasPreciseScrollingDeltas {
+            accumulatedDelta += delta
+            let threshold: CGFloat = 9
+
+            while accumulatedDelta >= threshold {
+                onStep?(1)
+                accumulatedDelta -= threshold
+            }
+            while accumulatedDelta <= -threshold {
+                onStep?(-1)
+                accumulatedDelta += threshold
+            }
+        } else {
+            onStep?(delta > 0 ? 1 : -1)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            window?.toggleFullScreen(nil)
+        }
+    }
+
+    override func resetCursorRects() {
+        guard enabled else { return }
+        addCursorRect(bounds, cursor: .resizeUpDown)
+    }
+}
+
+struct ScrollWheelCapture: NSViewRepresentable {
+    let enabled: Bool
+    let onStep: (Int) -> Void
+
+    func makeNSView(context: Context) -> ScrollCaptureNSView {
+        let view = ScrollCaptureNSView()
+        view.enabled = enabled
+        view.onStep = onStep
+        return view
+    }
+
+    func updateNSView(_ nsView: ScrollCaptureNSView, context: Context) {
+        nsView.enabled = enabled
+        nsView.onStep = onStep
     }
 }
 
@@ -139,14 +380,15 @@ struct FlipCard: View {
         GeometryReader { proxy in
             let w = proxy.size.width
             let h = proxy.size.height
+
             ZStack {
                 RoundedRectangle(cornerRadius: min(w, h) * 0.055, style: .continuous)
                     .fill(Color(white: 0.035))
                     .overlay(
                         RoundedRectangle(cornerRadius: min(w, h) * 0.055, style: .continuous)
-                            .stroke(Color.white.opacity(0.035), lineWidth: 1)
+                            .stroke(Color.white.opacity(0.04), lineWidth: 1)
                     )
-                    .shadow(color: .black.opacity(0.55), radius: 28, y: 12)
+                    .shadow(color: .black.opacity(0.55), radius: 24, y: 10)
 
                 Text(String(digit))
                     .font(.system(size: min(w * 0.86, h * 0.78), weight: .regular, design: .rounded))
@@ -157,13 +399,17 @@ struct FlipCard: View {
                     .offset(y: -h * 0.015)
 
                 Rectangle()
-                    .fill(Color.black.opacity(0.72))
+                    .fill(Color.black.opacity(0.78))
                     .frame(height: 1)
 
                 HStack {
-                    Capsule().fill(Color.black.opacity(0.85)).frame(width: 3, height: 18)
+                    Capsule()
+                        .fill(Color.black.opacity(0.9))
+                        .frame(width: 3, height: 18)
                     Spacer()
-                    Capsule().fill(Color.black.opacity(0.85)).frame(width: 3, height: 18)
+                    Capsule()
+                        .fill(Color.black.opacity(0.9))
+                        .frame(width: 3, height: 18)
                 }
                 .padding(.horizontal, 5)
             }
@@ -177,9 +423,60 @@ struct DigitPair: View {
     let digits: String
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             ForEach(Array(digits.enumerated()), id: \.offset) { _, char in
                 FlipCard(digit: char)
+            }
+        }
+    }
+}
+
+struct TimeUnitDisplay: View {
+    let digits: String
+    let label: String
+    let editable: Bool
+    let onStep: (Int) -> Void
+
+    var body: some View {
+        VStack(spacing: 11) {
+            ZStack {
+                DigitPair(digits: digits)
+
+                ScrollWheelCapture(enabled: editable, onStep: onStep)
+                    .opacity(0.001)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if editable {
+                HStack(spacing: 7) {
+                    Button {
+                        onStep(1)
+                    } label: {
+                        Image(systemName: "chevron.up")
+                            .font(.system(size: 9, weight: .bold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white.opacity(0.46))
+
+                    Text("\(label) • SCROLL")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .tracking(1.7)
+                        .foregroundStyle(.white.opacity(0.5))
+
+                    Button {
+                        onStep(-1)
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .bold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white.opacity(0.46))
+                }
+            } else {
+                Text(label)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .tracking(2.2)
+                    .foregroundStyle(.white.opacity(0.46))
             }
         }
     }
@@ -194,10 +491,10 @@ struct ModeButton: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 12, weight: selected ? .semibold : .medium))
-                .foregroundStyle(selected ? .black : .white.opacity(0.7))
-                .padding(.horizontal, 13)
+                .foregroundStyle(selected ? .black : .white.opacity(0.72))
+                .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .background(selected ? Color.white.opacity(0.92) : Color.white.opacity(0.07))
+                .background(selected ? Color.white.opacity(0.94) : Color.white.opacity(0.07))
                 .clipShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -214,46 +511,75 @@ struct ContentView: View {
             Color.black.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                Spacer(minLength: 22)
+                Spacer(minLength: 20)
 
                 Text(model.dateLabel)
-                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                    .tracking(7)
-                    .foregroundStyle(.white.opacity(0.75))
-                    .padding(.bottom, 24)
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.68))
+                    .padding(.bottom, 20)
+
+                if model.mainMode == .timer {
+                    Text(model.timerDirection.rawValue.uppercased())
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .tracking(3.8)
+                        .foregroundStyle(.white.opacity(0.34))
+                        .padding(.bottom, 12)
+                } else if model.mainMode == .pomodoro {
+                    Text(model.pomodoroPhase.rawValue.uppercased())
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .tracking(3.8)
+                        .foregroundStyle(.white.opacity(0.34))
+                        .padding(.bottom, 12)
+                }
 
                 GeometryReader { proxy in
-                    let horizontalPadding = max(32.0, proxy.size.width * 0.055)
-                    HStack(spacing: max(18, proxy.size.width * 0.022)) {
-                        DigitPair(digits: model.primaryDigits)
+                    HStack(spacing: max(10, proxy.size.width * 0.012)) {
+                        TimeUnitDisplay(
+                            digits: model.hourDigits,
+                            label: "HOUR",
+                            editable: model.timerValuesEditable,
+                            onStep: { model.adjustTimerComponent(.hour, by: $0); revealControlsTemporarily() }
+                        )
 
-                        Text(model.mode == .clock ? "│" : ":")
-                            .font(.system(size: min(proxy.size.width * 0.06, 72), weight: .ultraLight, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.28))
-                            .frame(width: max(30, proxy.size.width * 0.045))
+                        colon(proxy)
 
-                        DigitPair(digits: model.secondaryDigits)
+                        TimeUnitDisplay(
+                            digits: model.minuteDigits,
+                            label: "MIN",
+                            editable: model.timerValuesEditable,
+                            onStep: { model.adjustTimerComponent(.minute, by: $0); revealControlsTemporarily() }
+                        )
+
+                        colon(proxy)
+
+                        TimeUnitDisplay(
+                            digits: model.secondDigits,
+                            label: "SEC",
+                            editable: model.timerValuesEditable,
+                            onStep: { model.adjustTimerComponent(.second, by: $0); revealControlsTemporarily() }
+                        )
                     }
-                    .padding(.horizontal, horizontalPadding)
+                    .padding(.horizontal, max(24, proxy.size.width * 0.035))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxHeight: 560)
+                .frame(maxHeight: 470)
 
-                Text(model.sessionLabel)
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .tracking(3.5)
+                Text(model.statusLabel)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .tracking(3)
                     .foregroundStyle(.white.opacity(0.34))
-                    .padding(.top, 18)
+                    .padding(.top, 17)
 
-                Spacer(minLength: 28)
+                Spacer(minLength: 24)
 
                 controls
-                    .opacity(controlsVisible ? 1 : 0.06)
-                    .animation(.easeOut(duration: 0.25), value: controlsVisible)
-                    .padding(.bottom, 22)
+                    .opacity(controlsVisible ? 1 : 0.07)
+                    .animation(.easeOut(duration: 0.24), value: controlsVisible)
+                    .padding(.bottom, 20)
             }
         }
-        .frame(minWidth: 760, minHeight: 500)
+        .frame(minWidth: 760, minHeight: 520)
         .contentShape(Rectangle())
         .onHover { inside in
             if inside { revealControlsTemporarily() }
@@ -261,61 +587,124 @@ struct ContentView: View {
         .onTapGesture(count: 2) {
             NSApp.keyWindow?.toggleFullScreen(nil)
         }
-        .onAppear { revealControlsTemporarily() }
+        .onAppear {
+            revealControlsTemporarily()
+        }
+    }
+
+    private func colon(_ proxy: GeometryProxy) -> some View {
+        Text(":")
+            .font(.system(size: min(proxy.size.width * 0.045, 58), weight: .ultraLight, design: .rounded))
+            .foregroundStyle(.white.opacity(0.28))
+            .frame(width: max(18, proxy.size.width * 0.025))
+            .offset(y: -15)
     }
 
     private var controls: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 10) {
             HStack(spacing: 7) {
-                ModeButton(title: "Clock", selected: model.mode == .clock) { model.setMode(.clock); revealControlsTemporarily() }
-                ModeButton(title: "Focus", selected: model.mode == .focus) { model.setMode(.focus); revealControlsTemporarily() }
-                ModeButton(title: "Short", selected: model.mode == .shortBreak) { model.setMode(.shortBreak); revealControlsTemporarily() }
-                ModeButton(title: "Long", selected: model.mode == .longBreak) { model.setMode(.longBreak); revealControlsTemporarily() }
+                ModeButton(title: "Clock", selected: model.mainMode == .clock) {
+                    model.setMainMode(.clock)
+                    revealControlsTemporarily()
+                }
+                ModeButton(title: "Timer", selected: model.mainMode == .timer) {
+                    model.setMainMode(.timer)
+                    revealControlsTemporarily()
+                }
+                ModeButton(title: "Pomodoro", selected: model.mainMode == .pomodoro) {
+                    model.setMainMode(.pomodoro)
+                    revealControlsTemporarily()
+                }
+            }
+
+            if model.mainMode == .timer {
+                HStack(spacing: 7) {
+                    ModeButton(title: "Count Down", selected: model.timerDirection == .countDown) {
+                        model.setTimerDirection(.countDown)
+                        revealControlsTemporarily()
+                    }
+                    ModeButton(title: "Count Up", selected: model.timerDirection == .countUp) {
+                        model.setTimerDirection(.countUp)
+                        revealControlsTemporarily()
+                    }
+                }
+            } else if model.mainMode == .pomodoro {
+                HStack(spacing: 7) {
+                    ModeButton(title: "Focus", selected: model.pomodoroPhase == .focus) {
+                        model.setPomodoroPhase(.focus)
+                        revealControlsTemporarily()
+                    }
+                    ModeButton(title: "Short", selected: model.pomodoroPhase == .shortBreak) {
+                        model.setPomodoroPhase(.shortBreak)
+                        revealControlsTemporarily()
+                    }
+                    ModeButton(title: "Long", selected: model.pomodoroPhase == .longBreak) {
+                        model.setPomodoroPhase(.longBreak)
+                        revealControlsTemporarily()
+                    }
+                }
             }
 
             HStack(spacing: 9) {
-                if model.mode != .clock {
+                switch model.mainMode {
+                case .clock:
                     Button {
-                        model.adjustCurrentMode(by: -1)
+                        model.use24Hour.toggle()
+                        revealControlsTemporarily()
+                    } label: {
+                        Text(model.use24Hour ? "24H" : "12H")
+                            .frame(minWidth: 42)
+                    }
+
+                case .timer:
+                    Button {
+                        model.toggleRunning()
+                        revealControlsTemporarily()
+                    } label: {
+                        Label(model.isRunning ? "Pause" : "Start", systemImage: model.isRunning ? "pause.fill" : "play.fill")
+                            .frame(minWidth: 78)
+                    }
+                    .keyboardShortcut(.space, modifiers: [])
+
+                    Button {
+                        model.resetCurrent()
+                        revealControlsTemporarily()
+                    } label: {
+                        Label("Reset", systemImage: "arrow.counterclockwise")
+                    }
+
+                case .pomodoro:
+                    Button {
+                        model.adjustPomodoroMinutes(by: -1)
                         revealControlsTemporarily()
                     } label: {
                         Image(systemName: "minus")
                     }
-                    .help("Decrease this session by one minute")
+                    .disabled(model.isRunning)
 
                     Button {
                         model.toggleRunning()
                         revealControlsTemporarily()
                     } label: {
                         Label(model.isRunning ? "Pause" : "Start", systemImage: model.isRunning ? "pause.fill" : "play.fill")
-                            .frame(minWidth: 74)
+                            .frame(minWidth: 78)
                     }
                     .keyboardShortcut(.space, modifiers: [])
 
                     Button {
-                        model.reset()
-                        model.isRunning = false
+                        model.resetCurrent()
                         revealControlsTemporarily()
                     } label: {
-                        Image(systemName: "arrow.counterclockwise")
+                        Label("Reset", systemImage: "arrow.counterclockwise")
                     }
-                    .help("Reset timer")
 
                     Button {
-                        model.adjustCurrentMode(by: 1)
+                        model.adjustPomodoroMinutes(by: 1)
                         revealControlsTemporarily()
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .help("Increase this session by one minute")
-                } else {
-                    Button {
-                        model.use24Hour.toggle()
-                        revealControlsTemporarily()
-                    } label: {
-                        Text(model.use24Hour ? "24H" : "12H")
-                            .frame(minWidth: 40)
-                    }
+                    .disabled(model.isRunning)
                 }
 
                 Button {
@@ -328,7 +717,7 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)
-            .tint(.white.opacity(0.12))
+            .tint(.white.opacity(0.13))
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 13)
@@ -347,7 +736,9 @@ struct ContentView: View {
         hideTask = Task {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard !Task.isCancelled else { return }
-            await MainActor.run { controlsVisible = false }
+            await MainActor.run {
+                controlsVisible = false
+            }
         }
     }
 }
@@ -361,24 +752,5 @@ struct FlipClockPomodoroApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1200, height: 760)
-        .commands {
-            CommandMenu("Timer") {
-                Button("Clock") { NotificationCenter.default.post(name: .selectClock, object: nil) }
-                    .keyboardShortcut("1", modifiers: [.command])
-                Button("Focus") { NotificationCenter.default.post(name: .selectFocus, object: nil) }
-                    .keyboardShortcut("2", modifiers: [.command])
-                Button("Short Break") { NotificationCenter.default.post(name: .selectShortBreak, object: nil) }
-                    .keyboardShortcut("3", modifiers: [.command])
-                Button("Long Break") { NotificationCenter.default.post(name: .selectLongBreak, object: nil) }
-                    .keyboardShortcut("4", modifiers: [.command])
-            }
-        }
     }
-}
-
-extension Notification.Name {
-    static let selectClock = Notification.Name("selectClock")
-    static let selectFocus = Notification.Name("selectFocus")
-    static let selectShortBreak = Notification.Name("selectShortBreak")
-    static let selectLongBreak = Notification.Name("selectLongBreak")
 }

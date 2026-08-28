@@ -59,8 +59,7 @@ final class ClockModel: ObservableObject {
         timer = Timer.publish(every: 1, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
-                guard let self else { return }
-                self.tick()
+                self?.tick()
             }
     }
 
@@ -263,10 +262,6 @@ final class ClockModel: ObservableObject {
         }
     }
 
-    var hourDigits: String { String(format: "%02d", displayComponents.0) }
-    var minuteDigits: String { String(format: "%02d", displayComponents.1) }
-    var secondDigits: String { String(format: "%02d", displayComponents.2) }
-
     var dateLabel: String {
         let formatter = DateFormatter()
         formatter.locale = Locale.current
@@ -283,10 +278,7 @@ final class ClockModel: ObservableObject {
             if isRunning {
                 return timerDirection == .countDown ? "COUNTING DOWN" : "COUNTING UP"
             }
-            if timerDirection == .countDown && timerCurrentSeconds == 0 {
-                return "SCROLL HOUR • MIN • SEC TO SET"
-            }
-            return "SCROLL HOUR • MIN • SEC TO ADJUST"
+            return "TWO-FINGER SCROLL THE HOUR • MIN • SEC WHEELS"
 
         case .pomodoro:
             switch pomodoroPhase {
@@ -309,6 +301,7 @@ final class ScrollCaptureNSView: NSView {
     var enabled = false {
         didSet { window?.invalidateCursorRects(for: self) }
     }
+
     var onStep: ((Int) -> Void)?
     private var accumulatedDelta: CGFloat = 0
 
@@ -329,24 +322,19 @@ final class ScrollCaptureNSView: NSView {
 
         if event.hasPreciseScrollingDeltas {
             accumulatedDelta += delta
-            let threshold: CGFloat = 9
+            let threshold: CGFloat = 13
 
             while accumulatedDelta >= threshold {
                 onStep?(1)
                 accumulatedDelta -= threshold
             }
+
             while accumulatedDelta <= -threshold {
                 onStep?(-1)
                 accumulatedDelta += threshold
             }
         } else {
             onStep?(delta > 0 ? 1 : -1)
-        }
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2 {
-            window?.toggleFullScreen(nil)
         }
     }
 
@@ -420,7 +408,9 @@ struct FlipCard: View {
 }
 
 struct DigitPair: View {
-    let digits: String
+    let value: Int
+
+    var digits: String { String(format: "%02d", value) }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -431,52 +421,138 @@ struct DigitPair: View {
     }
 }
 
+struct VisibleWheelPicker: View {
+    let value: Int
+    let maxValue: Int
+    let enabled: Bool
+    let onStep: (Int) -> Void
+
+    private func wrapped(_ raw: Int) -> Int {
+        let modulus = maxValue + 1
+        let normalized = raw % modulus
+        return normalized >= 0 ? normalized : normalized + modulus
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(spacing: 5) {
+                Button {
+                    onStep(1)
+                } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 25, height: 25)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(enabled ? 0.62 : 0.18))
+                .disabled(!enabled)
+
+                Button {
+                    onStep(-1)
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 25, height: 25)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(enabled ? 0.62 : 0.18))
+                .disabled(!enabled)
+            }
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.white.opacity(enabled ? 0.055 : 0.025))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Color.white.opacity(enabled ? 0.10 : 0.04), lineWidth: 1)
+                    )
+
+                VStack(spacing: 1) {
+                    wheelRow(wrapped(value + 2), opacity: 0.18, size: 10)
+                    wheelRow(wrapped(value + 1), opacity: 0.36, size: 12)
+
+                    Text(String(format: "%02d", value))
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(enabled ? 0.94 : 0.40))
+                        .frame(width: 52, height: 28)
+                        .background(Color.white.opacity(enabled ? 0.085 : 0.03))
+                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+                    wheelRow(wrapped(value - 1), opacity: 0.36, size: 12)
+                    wheelRow(wrapped(value - 2), opacity: 0.18, size: 10)
+                }
+                .padding(.vertical, 7)
+
+                if enabled {
+                    ScrollWheelCapture(enabled: true, onStep: onStep)
+                        .opacity(0.001)
+                        .padding(.trailing, 13)
+                }
+            }
+            .frame(width: 80, height: 116)
+
+            VStack(spacing: 0) {
+                Capsule()
+                    .fill(Color.white.opacity(enabled ? 0.13 : 0.04))
+                    .frame(width: 4, height: 96)
+                    .overlay(alignment: .center) {
+                        Capsule()
+                            .fill(Color.white.opacity(enabled ? 0.46 : 0.08))
+                            .frame(width: 4, height: 27)
+                    }
+
+                Image(systemName: "hand.draw")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.white.opacity(enabled ? 0.34 : 0.08))
+                    .padding(.top, 5)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .help(enabled ? "Two-finger scroll on the trackpad to change this value" : "Pause the timer to edit")
+    }
+
+    private func wheelRow(_ number: Int, opacity: Double, size: CGFloat) -> some View {
+        Text(String(format: "%02d", number))
+            .font(.system(size: size, weight: .medium, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.white.opacity(enabled ? opacity : opacity * 0.35))
+            .frame(height: 15)
+    }
+}
+
 struct TimeUnitDisplay: View {
-    let digits: String
+    let value: Int
+    let maxValue: Int
     let label: String
     let editable: Bool
+    let showWheel: Bool
     let onStep: (Int) -> Void
 
     var body: some View {
-        VStack(spacing: 11) {
+        VStack(spacing: 9) {
             ZStack {
-                DigitPair(digits: digits)
+                DigitPair(value: value)
 
-                ScrollWheelCapture(enabled: editable, onStep: onStep)
-                    .opacity(0.001)
+                if editable {
+                    ScrollWheelCapture(enabled: true, onStep: onStep)
+                        .opacity(0.001)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if editable {
-                HStack(spacing: 7) {
-                    Button {
-                        onStep(1)
-                    } label: {
-                        Image(systemName: "chevron.up")
-                            .font(.system(size: 9, weight: .bold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.white.opacity(0.46))
+            Text(label)
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .tracking(2.2)
+                .foregroundStyle(.white.opacity(0.46))
 
-                    Text("\(label) • SCROLL")
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .tracking(1.7)
-                        .foregroundStyle(.white.opacity(0.5))
-
-                    Button {
-                        onStep(-1)
-                    } label: {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 9, weight: .bold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.white.opacity(0.46))
-                }
-            } else {
-                Text(label)
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .tracking(2.2)
-                    .foregroundStyle(.white.opacity(0.46))
+            if showWheel {
+                VisibleWheelPicker(
+                    value: value,
+                    maxValue: maxValue,
+                    enabled: editable,
+                    onStep: onStep
+                )
             }
         }
     }
@@ -511,75 +587,93 @@ struct ContentView: View {
             Color.black.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                Spacer(minLength: 20)
+                Spacer(minLength: 16)
 
                 Text(model.dateLabel)
                     .font(.system(size: 14, weight: .medium, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.white.opacity(0.68))
-                    .padding(.bottom, 20)
+                    .padding(.bottom, 14)
 
                 if model.mainMode == .timer {
                     Text(model.timerDirection.rawValue.uppercased())
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .tracking(3.8)
                         .foregroundStyle(.white.opacity(0.34))
-                        .padding(.bottom, 12)
+                        .padding(.bottom, 8)
                 } else if model.mainMode == .pomodoro {
                     Text(model.pomodoroPhase.rawValue.uppercased())
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .tracking(3.8)
                         .foregroundStyle(.white.opacity(0.34))
-                        .padding(.bottom, 12)
+                        .padding(.bottom, 8)
                 }
 
                 GeometryReader { proxy in
+                    let components = model.displayComponents
+                    let showWheel = model.mainMode == .timer && !model.isRunning
+
                     HStack(spacing: max(10, proxy.size.width * 0.012)) {
                         TimeUnitDisplay(
-                            digits: model.hourDigits,
+                            value: components.0,
+                            maxValue: 99,
                             label: "HOUR",
                             editable: model.timerValuesEditable,
-                            onStep: { model.adjustTimerComponent(.hour, by: $0); revealControlsTemporarily() }
+                            showWheel: showWheel,
+                            onStep: {
+                                model.adjustTimerComponent(.hour, by: $0)
+                                revealControlsTemporarily()
+                            }
                         )
 
-                        colon(proxy)
+                        colon(proxy, wheelVisible: showWheel)
 
                         TimeUnitDisplay(
-                            digits: model.minuteDigits,
+                            value: components.1,
+                            maxValue: 59,
                             label: "MIN",
                             editable: model.timerValuesEditable,
-                            onStep: { model.adjustTimerComponent(.minute, by: $0); revealControlsTemporarily() }
+                            showWheel: showWheel,
+                            onStep: {
+                                model.adjustTimerComponent(.minute, by: $0)
+                                revealControlsTemporarily()
+                            }
                         )
 
-                        colon(proxy)
+                        colon(proxy, wheelVisible: showWheel)
 
                         TimeUnitDisplay(
-                            digits: model.secondDigits,
+                            value: components.2,
+                            maxValue: 59,
                             label: "SEC",
                             editable: model.timerValuesEditable,
-                            onStep: { model.adjustTimerComponent(.second, by: $0); revealControlsTemporarily() }
+                            showWheel: showWheel,
+                            onStep: {
+                                model.adjustTimerComponent(.second, by: $0)
+                                revealControlsTemporarily()
+                            }
                         )
                     }
                     .padding(.horizontal, max(24, proxy.size.width * 0.035))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxHeight: 470)
+                .frame(maxHeight: model.mainMode == .timer && !model.isRunning ? 560 : 450)
 
                 Text(model.statusLabel)
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .tracking(3)
-                    .foregroundStyle(.white.opacity(0.34))
-                    .padding(.top, 17)
+                    .tracking(2.6)
+                    .foregroundStyle(.white.opacity(0.36))
+                    .padding(.top, 10)
 
-                Spacer(minLength: 24)
+                Spacer(minLength: 18)
 
                 controls
                     .opacity(controlsVisible ? 1 : 0.07)
                     .animation(.easeOut(duration: 0.24), value: controlsVisible)
-                    .padding(.bottom, 20)
+                    .padding(.bottom, 18)
             }
         }
-        .frame(minWidth: 760, minHeight: 520)
+        .frame(minWidth: 820, minHeight: 650)
         .contentShape(Rectangle())
         .onHover { inside in
             if inside { revealControlsTemporarily() }
@@ -592,12 +686,12 @@ struct ContentView: View {
         }
     }
 
-    private func colon(_ proxy: GeometryProxy) -> some View {
+    private func colon(_ proxy: GeometryProxy, wheelVisible: Bool) -> some View {
         Text(":")
             .font(.system(size: min(proxy.size.width * 0.045, 58), weight: .ultraLight, design: .rounded))
             .foregroundStyle(.white.opacity(0.28))
             .frame(width: max(18, proxy.size.width * 0.025))
-            .offset(y: -15)
+            .offset(y: wheelVisible ? -72 : -15)
     }
 
     private var controls: some View {
@@ -751,6 +845,6 @@ struct FlipClockPomodoroApp: App {
                 .preferredColorScheme(.dark)
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1200, height: 760)
+        .defaultSize(width: 1200, height: 820)
     }
 }

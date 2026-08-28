@@ -26,8 +26,8 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>FlipClock Pomodoro</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>1.1.0</string>
+  <key>CFBundleVersion</key><string>2</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
@@ -114,21 +114,33 @@ codesign --verify --deep --strict --verbose=2 "$APP"
 cp -R "$APP" "$BUILD/dmg-root/"
 ln -s /Applications "$BUILD/dmg-root/Applications"
 cat > "$BUILD/dmg-root/README.txt" <<'TXT'
-FlipClock Pomodoro
+FlipClock Pomodoro 1.1
 
 1. Drag “FlipClock Pomodoro” to Applications.
 2. Open it from Applications.
 3. If macOS blocks the first launch because this personal build is not notarized, Control-click the app, choose Open, then choose Open again.
 
-Controls
-• Clock / Focus / Short / Long select the mode.
-• Space starts or pauses a Pomodoro timer.
-• − / + changes that mode's duration by one minute.
-• Reset returns the selected timer to its saved duration.
-• Fullscreen button, or double-click the clock, toggles fullscreen.
-• Clock mode includes a 12H / 24H switch.
+Clock
+• Shows HOUR : MIN : SEC.
+• Switch between 12-hour and 24-hour time.
 
-Defaults: Focus 25 min • Short Break 5 min • Long Break 15 min
+Timer
+• Choose Count Down or Count Up.
+• Both modes show HOUR : MIN : SEC, up to 99:59:59.
+• Before starting, place the pointer over HOUR, MIN, or SEC and scroll up/down with a mouse wheel or trackpad to change that value.
+• Small up/down buttons below each value provide a non-scroll alternative.
+• Count Down remembers its own starting value.
+• Count Up remembers its own starting value and can begin from 00:00:00 or another value.
+• Space starts/pauses; Reset returns to the saved starting value.
+
+Pomodoro
+• Focus 25 min • Short Break 5 min • Long Break 15 min by default.
+• − / + changes the selected Pomodoro phase by one minute.
+• Space starts/pauses and Reset restores the selected phase.
+
+Display
+• Double-click the clock or use the fullscreen button to toggle fullscreen.
+• Controls fade down automatically to keep the display clean.
 TXT
 
 hdiutil create \
